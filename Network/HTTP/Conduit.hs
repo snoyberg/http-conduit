@@ -52,6 +52,8 @@ module Network.HTTP.Conduit
       simpleHttp
     , httpLbs
     , http
+    , httpLbsWithSink
+    , httpWithSink
       -- * Datatypes
     , Proxy (..)
     , RequestBody (..)
@@ -114,6 +116,7 @@ import Control.Monad.Base (liftBase)
 import Control.Monad.IO.Class (MonadIO (liftIO))
 
 import qualified Data.Conduit as C
+import qualified Data.Conduit.List as CL
 import Data.Conduit.Blaze (builderToByteString)
 import Control.Monad.Trans.Resource (ResourceT, ResourceIO)
 import Control.Exception.Lifted (try, SomeException)
@@ -147,10 +150,21 @@ http
     => Request m
     -> Manager
     -> ResourceT m (Response (C.Source m S.ByteString))
-http req0 manager = do
+http req0 manager = httpWithSink CL.sinkNull req0 manager
+
+-- | Like the 'http' function, but takes an extra sink parameter. This sink
+-- parameter is passed the 'ByteString' that is sent to the HTTP connection.
+-- This can be useful for debugging.
+httpWithSink
+    :: ResourceIO m
+    => C.Sink S.ByteString m ()
+    -> Request m
+    -> Manager
+    -> ResourceT m (Response (C.Source m S.ByteString))
+httpWithSink sink req0 manager = do
     res@(Response status hs body) <-
         if redirectCount req0 == 0
-            then httpRaw req0 manager
+            then httpRaw sink req0 manager
             else go (redirectCount req0) req0
     case checkStatus req0 status hs of
         Nothing -> return res
@@ -160,7 +174,7 @@ http req0 manager = do
   where
     go 0 _ = liftBase $ throwIO TooManyRedirects
     go count req = do
-        res@(Response (W.Status code _) hs _) <- httpRaw req manager
+        res@(Response (W.Status code _) hs _) <- httpRaw sink req manager
         case (300 <= code && code < 400, lookup "location" hs) of
             (True, Just l'') -> do
                 -- Prepend scheme, host and port if missing
@@ -198,13 +212,16 @@ http req0 manager = do
 -- | Get a 'Response' without any redirect following.
 httpRaw
      :: ResourceIO m
-     => Request m
+     => C.Sink S.ByteString m ()
+     -> Request m
      -> Manager
      -> ResourceT m (Response (C.Source m S.ByteString))
-httpRaw req m = do
+httpRaw sink req m = do
+    let builtRequest = requestBuilder req
     (connRelease, ci, isManaged) <- getConn req m
     bsrc <- C.bufferSource $ connSource ci
-    ex <- try $ requestBuilder req C.$$ builderToByteString C.=$ connSink ci
+    builtRequest C.$$ builderToByteString C.=$ sink
+    ex <- try $ builtRequest C.$$ builderToByteString C.=$ connSink ci
     case (ex :: Either SomeException (), isManaged) of
         -- Connection was reused, and might be been closed. Try again
         (Left _, Reused) -> do
@@ -234,7 +251,17 @@ httpRaw req m = do
 -- Note: Unlike previous versions, this function will perform redirects, as
 -- specified by the 'redirectCount' setting.
 httpLbs :: ResourceIO m => Request m -> Manager -> ResourceT m (Response L.ByteString)
-httpLbs r = lbsResponse . http r
+httpLbs r = httpLbsWithSink CL.sinkNull r
+
+-- | Like the 'httpLbs' function, but takes an extra sink parameter. This sink
+-- parameter is passed the 'ByteString' that is sent to the HTTP connection.
+-- This can be useful for debugging.
+httpLbsWithSink :: ResourceIO m
+                => C.Sink S.ByteString m ()
+                -> Request m
+                -> Manager
+                -> ResourceT m (Response L.ByteString)
+httpLbsWithSink sink r = lbsResponse . httpWithSink sink r
 
 -- | Download the specified URL, following any redirects, and
 -- return the response body.
