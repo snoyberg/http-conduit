@@ -4,6 +4,7 @@ module Network.HTTP.Conduit.Browser
     , BrowserAction
     , browse
     , makeRequest
+    , makeRequestLbs
     , defaultState
     , getBrowserState
     , setBrowserState
@@ -28,6 +29,7 @@ module Network.HTTP.Conduit.Browser
   where
 
 import qualified Data.ByteString as BS
+import qualified Data.ByteString.Lazy as L
 import Control.Monad.State
 import Control.Exception
 import qualified Control.Exception.Lifted as LE
@@ -94,18 +96,18 @@ makeRequest request = do
   where retryHelper request' retry_count e
           | retry_count == 0 = case e of
             Just e' -> throw e'
-            Nothing -> throw TooManyRedirects
+            Nothing -> throw TooManyRetries
           | otherwise = do
               BrowserState {maxRedirects = max_redirects} <- get
-              resp <- LE.catch (runRedirectionChain request' max_redirects)
+              resp <- LE.catch (if max_redirects==0
+                                  then (\(_,a,_) -> a) `fmap` performRequest request'
+                                  else runRedirectionChain request' max_redirects [])
                 (\ e' -> retryHelper request' (retry_count - 1) (Just (e' :: HttpException)))
               let code = HT.statusCode $ HC.responseStatus resp
               if code < 200 || code >= 300
                 then retryHelper request' (retry_count - 1) (Just $ HC.StatusCodeException (HC.responseStatus resp) (HC.responseHeaders resp))
                 else return resp
-        runRedirectionChain request' redirect_count
-          | redirect_count == 0 = throw TooManyRedirects
-          | otherwise = do
+        performRequest request' = do
               s@(BrowserState { manager = manager'
                               , authorities = auths
                               , cookieJar = cookie_jar
@@ -118,11 +120,17 @@ makeRequest request = do
               res <- lift $ HC.http request'' manager'
               (cookie_jar'', response) <- liftIO $ updateCookieJar res request'' now cookie_jar' cookie_filter
               put $ s {cookieJar = cookie_jar''}
+              return (request'', res, response)
+        runRedirectionChain request' redirect_count ress
+          | redirect_count == (-1) = throw . TooManyRedirects =<< mapM (liftIO . runResourceT . lbsResponse) ress
+          | otherwise = do
+              (request'', res, response) <- performRequest request'
               let code = HT.statusCode (HC.responseStatus response)
               if code >= 300 && code < 400
-                then runRedirectionChain (case HC.getRedirectedRequest request'' (responseHeaders response) code of
-                  Just a -> a
-                  Nothing -> throw HC.UnparseableRedirect) (redirect_count - 1)
+                then do request''' <- case HC.getRedirectedRequest request'' (responseHeaders response) code of
+                            Just a -> return a
+                            Nothing -> throw . HC.UnparseableRedirect =<< (liftIO $ runResourceT $ lbsResponse response)
+                        runRedirectionChain request''' (redirect_count - 1) (res:ress)
                 else return res
         applyAuthorities auths request' = case auths request' of
           Just (user, pass) -> applyBasicAuth user pass request'
@@ -130,6 +138,9 @@ makeRequest request = do
         applyUserAgent ua request' = request' {requestHeaders = (k, ua) : hs}
           where hs = filter ((/= k) . fst) $ requestHeaders request'
                 k = mk $ fromString "User-Agent"
+
+makeRequestLbs :: Request (ResourceT IO) -> BrowserAction (Response L.ByteString)
+makeRequestLbs = liftIO . runResourceT . lbsResponse <=< makeRequest
 
 updateCookieJar :: Response a -> Request (ResourceT IO) -> UTCTime -> CookieJar -> (Request (ResourceT IO) -> Cookie -> IO Bool) -> IO (CookieJar, Response a)
 updateCookieJar response request' now cookie_jar cookie_filter = do
