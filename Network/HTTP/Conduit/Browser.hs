@@ -72,6 +72,9 @@ module Network.HTTP.Conduit.Browser
     , getMaxRetryCount
     , setMaxRetryCount
     , withMaxRetryCount
+    , getTimeout
+    , setTimeout
+    , withTimeout
     , getAuthorities
     , setAuthorities
     , withAuthorities
@@ -127,6 +130,7 @@ import qualified Network.HTTP.Conduit as HC
 data BrowserState = BrowserState
   { maxRedirects        :: Maybe Int
   , maxRetryCount       :: Int
+  , timeout             :: Maybe Int
   , authorities         :: Request (ResourceT IO) -> Maybe (BS.ByteString, BS.ByteString)
   , cookieFilter        :: Request (ResourceT IO) -> Cookie -> IO Bool
   , cookieJar           :: CookieJar
@@ -138,6 +142,7 @@ data BrowserState = BrowserState
 defaultState :: Manager -> BrowserState
 defaultState m = BrowserState { maxRedirects = Nothing
                               , maxRetryCount = 1
+                              , timeout = Nothing
                               , authorities = \ _ -> Nothing
                               , cookieFilter = \ _ _ -> return True
                               , cookieJar = def
@@ -158,6 +163,7 @@ makeRequest request = do
   BrowserState
     { maxRetryCount = max_retry_count
     , maxRedirects = max_redirects
+    , timeout = time_out
     , currentProxy  = current_proxy
     , overrideHeaders = override_headers
     } <- get
@@ -165,6 +171,7 @@ makeRequest request = do
     request { redirectCount = 0
             , proxy = maybe (proxy request) Just current_proxy
             , checkStatus = \ _ _ -> Nothing
+            , responseTimeout = maybe (responseTimeout request) Just time_out
             }) max_retry_count (fromMaybe (redirectCount request) max_redirects) Nothing
   where retryHelper request' retry_count max_redirects e
           | retry_count == 0 = case e of
@@ -261,6 +268,19 @@ withMaxRetryCount a b = do
   setMaxRetryCount a
   out <- b
   setMaxRetryCount current
+  return out
+-- | Number of microseconds to wait for a response.
+-- if Nothing uses Request's 'responseTimeout'
+getTimeout         :: BrowserAction (Maybe Int)
+getTimeout         = get >>= \ a -> return $ timeout a
+setTimeout         :: Maybe Int -> BrowserAction ()
+setTimeout       b = get >>= \ a -> put a {timeout = b}
+withTimeout        :: Maybe Int -> BrowserAction a -> BrowserAction a
+withTimeout    a b = do
+  current <- getTimeout
+  setTimeout a
+  out <- b
+  setTimeout current
   return out
 -- | A user-provided function that provides optional authorities.
 -- This function gets run on all requests before they get sent out.

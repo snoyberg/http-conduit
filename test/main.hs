@@ -29,6 +29,8 @@ import qualified Data.Text.Encoding as TE
 import qualified Data.ByteString.Lazy as L
 import Blaze.ByteString.Builder (fromByteString)
 
+-- TODO tests for responseTimeout/Browser.timeout.
+
 strictToLazy :: S.ByteString -> L.ByteString
 strictToLazy = L.fromChunks . replicate 1
 
