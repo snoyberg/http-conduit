@@ -66,21 +66,37 @@ module Network.HTTP.Conduit.Browser
     , getBrowserState
     , setBrowserState
     , withBrowserState
-    , getMaxRedirects 
-    , setMaxRedirects 
+    , getMaxRedirects
+    , setMaxRedirects
+    , withMaxRedirects
     , getMaxRetryCount
     , setMaxRetryCount
-    , getAuthorities  
-    , setAuthorities  
-    , getCookieFilter 
-    , setCookieFilter 
-    , getCookieJar    
-    , setCookieJar    
-    , getCurrentProxy 
-    , setCurrentProxy 
-    , getUserAgent    
-    , setUserAgent    
-    , getManager      
+    , withMaxRetryCount
+    , getTimeout
+    , setTimeout
+    , withTimeout
+    , getAuthorities
+    , setAuthorities
+    , withAuthorities
+    , getCookieFilter
+    , setCookieFilter
+    , withCookieFilter
+    , getCookieJar
+    , setCookieJar
+    , withCookieJar
+    , getCurrentProxy
+    , setCurrentProxy
+    , withCurrentProxy
+    , getOverrideHeaders
+    , setOverrideHeaders
+    , withOverrideHeaders
+    , insertOverrideHeader
+    , deleteOverrideHeader
+    , withOverrideHeader
+    , getUserAgent
+    , setUserAgent
+    , withUserAgent
+    , getManager
     , setManager
     )
   where
@@ -95,13 +111,15 @@ import Data.Conduit
 import Prelude hiding (catch)
 #endif
 import qualified Network.HTTP.Types as HT
+import qualified Network.HTTP.Types.Header as HT
 import Data.Time.Clock (getCurrentTime, UTCTime)
 import Data.CaseInsensitive (mk)
 import Data.ByteString.UTF8 (fromString)
 import Data.List (partition)
 import Web.Cookie (parseSetCookie)
 import Data.Default (def)
-import Data.Maybe (catMaybes)
+import Data.Maybe (catMaybes, fromMaybe)
+import qualified Data.Map as Map
 
 import Network.HTTP.Conduit.Cookies hiding (updateCookieJar)
 import Network.HTTP.Conduit.Request
@@ -110,24 +128,26 @@ import Network.HTTP.Conduit.Manager
 import qualified Network.HTTP.Conduit as HC
 
 data BrowserState = BrowserState
-  { maxRedirects        :: Int
+  { maxRedirects        :: Maybe Int
   , maxRetryCount       :: Int
+  , timeout             :: Maybe Int
   , authorities         :: Request (ResourceT IO) -> Maybe (BS.ByteString, BS.ByteString)
   , cookieFilter        :: Request (ResourceT IO) -> Cookie -> IO Bool
   , cookieJar           :: CookieJar
   , currentProxy        :: Maybe Proxy
-  , userAgent           :: BS.ByteString
+  , overrideHeaders     :: Map.Map HT.HeaderName BS.ByteString
   , manager             :: Manager
   } 
 
 defaultState :: Manager -> BrowserState
-defaultState m = BrowserState { maxRedirects = 10
+defaultState m = BrowserState { maxRedirects = Nothing
                               , maxRetryCount = 1
+                              , timeout = Nothing
                               , authorities = \ _ -> Nothing
                               , cookieFilter = \ _ _ -> return True
                               , cookieJar = def
                               , currentProxy = Nothing
-                              , userAgent = fromString "http-conduit"
+                              , overrideHeaders = Map.singleton HT.hUserAgent (fromString "http-conduit")
                               , manager = m
                               }
 
@@ -142,27 +162,29 @@ makeRequest :: Request (ResourceT IO) -> BrowserAction (Response (ResumableSourc
 makeRequest request = do
   BrowserState
     { maxRetryCount = max_retry_count
+    , maxRedirects = max_redirects
+    , timeout = time_out
     , currentProxy  = current_proxy
-    , userAgent     = user_agent
+    , overrideHeaders = override_headers
     } <- get
-  retryHelper (applyUserAgent user_agent $
+  retryHelper (applyOverrideHeaders override_headers $
     request { redirectCount = 0
-            , proxy = current_proxy
+            , proxy = maybe (proxy request) Just current_proxy
             , checkStatus = \ _ _ -> Nothing
-            }) max_retry_count Nothing
-  where retryHelper request' retry_count e
+            , responseTimeout = maybe (responseTimeout request) Just time_out
+            }) max_retry_count (fromMaybe (redirectCount request) max_redirects) Nothing
+  where retryHelper request' retry_count max_redirects e
           | retry_count == 0 = case e of
             Just e' -> throw e'
             Nothing -> throw TooManyRetries
           | otherwise = do
-              BrowserState {maxRedirects = max_redirects} <- get
               resp <- LE.catch (if max_redirects==0
                                   then (\(_,a,_) -> a) `fmap` performRequest request'
                                   else runRedirectionChain request' max_redirects [])
-                (\ e' -> retryHelper request' (retry_count - 1) (Just (e' :: HttpException)))
+                (\ e' -> retryHelper request' (retry_count - 1) max_redirects (Just (e' :: HttpException)))
               let code = HT.statusCode $ HC.responseStatus resp
               if code < 200 || code >= 300
-                then retryHelper request' (retry_count - 1) (Just $ HC.StatusCodeException (HC.responseStatus resp) (HC.responseHeaders resp))
+                then retryHelper request' (retry_count - 1) max_redirects (Just $ HC.StatusCodeException (HC.responseStatus resp) (HC.responseHeaders resp))
                 else return resp
         performRequest request' = do
               s@(BrowserState { manager = manager'
@@ -192,12 +214,13 @@ makeRequest request = do
         applyAuthorities auths request' = case auths request' of
           Just (user, pass) -> applyBasicAuth user pass request'
           Nothing -> request'
-        applyUserAgent ua request' = request' {requestHeaders = (k, ua) : hs}
-          where hs = filter ((/= k) . fst) $ requestHeaders request'
-                k = mk $ fromString "User-Agent"
 
 makeRequestLbs :: Request (ResourceT IO) -> BrowserAction (Response L.ByteString)
 makeRequestLbs = liftIO . runResourceT . lbsResponse <=< makeRequest
+
+applyOverrideHeaders :: Map.Map HT.HeaderName BS.ByteString -> Request a -> Request a
+applyOverrideHeaders ov request' = request' {requestHeaders = x $ requestHeaders request'}
+  where x r = Map.toList $ Map.union ov (Map.fromList r)
 
 updateCookieJar :: Response a -> Request (ResourceT IO) -> UTCTime -> CookieJar -> (Request (ResourceT IO) -> Cookie -> IO Bool) -> IO (CookieJar, Response a)
 updateCookieJar response request' now cookie_jar cookie_filter = do
@@ -209,11 +232,11 @@ updateCookieJar response request' now cookie_jar cookie_filter = do
         cookieJar' = foldl (\ cj c -> insertCheckedCookie c cj True) cookie_jar
 
 -- | You can save and restore the state at will
-getBrowserState :: BrowserAction BrowserState
+getBrowserState    :: BrowserAction BrowserState
 getBrowserState = get
-setBrowserState :: BrowserState -> BrowserAction ()
+setBrowserState    :: BrowserState -> BrowserAction ()
 setBrowserState = put
-withBrowserState :: BrowserState -> BrowserAction a -> BrowserAction a
+withBrowserState   :: BrowserState -> BrowserAction a -> BrowserAction a
 withBrowserState s a = do
   current <- get
   put s
@@ -221,16 +244,44 @@ withBrowserState s a = do
   put current
   return out
 
--- | The number of redirects to allow
-getMaxRedirects    :: BrowserAction Int
+-- | The number of redirects to allow.
+-- if Nothing uses Request's 'redirectCount'
+getMaxRedirects    :: BrowserAction (Maybe Int)
 getMaxRedirects    = get >>= \ a -> return $ maxRedirects a
-setMaxRedirects    :: Int -> BrowserAction ()
+setMaxRedirects    :: Maybe Int -> BrowserAction ()
 setMaxRedirects  b = get >>= \ a -> put a {maxRedirects = b}
+withMaxRedirects   :: Maybe Int -> BrowserAction a -> BrowserAction a
+withMaxRedirects a b = do
+  current <- getMaxRedirects
+  setMaxRedirects a
+  out <- b
+  setMaxRedirects current
+  return out
 -- | The number of times to retry a failed connection
 getMaxRetryCount   :: BrowserAction Int
 getMaxRetryCount   = get >>= \ a -> return $ maxRetryCount a
-setMaxRetryCount    :: Int -> BrowserAction ()
+setMaxRetryCount   :: Int -> BrowserAction ()
 setMaxRetryCount b = get >>= \ a -> put a {maxRetryCount = b}
+withMaxRetryCount  :: Int -> BrowserAction a -> BrowserAction a
+withMaxRetryCount a b = do
+  current <- getMaxRetryCount
+  setMaxRetryCount a
+  out <- b
+  setMaxRetryCount current
+  return out
+-- | Number of microseconds to wait for a response.
+-- if Nothing uses Request's 'responseTimeout'
+getTimeout         :: BrowserAction (Maybe Int)
+getTimeout         = get >>= \ a -> return $ timeout a
+setTimeout         :: Maybe Int -> BrowserAction ()
+setTimeout       b = get >>= \ a -> put a {timeout = b}
+withTimeout        :: Maybe Int -> BrowserAction a -> BrowserAction a
+withTimeout    a b = do
+  current <- getTimeout
+  setTimeout a
+  out <- b
+  setTimeout current
+  return out
 -- | A user-provided function that provides optional authorities.
 -- This function gets run on all requests before they get sent out.
 -- The output of this function is applied to the request.
@@ -238,27 +289,100 @@ getAuthorities     :: BrowserAction (Request (ResourceT IO) -> Maybe (BS.ByteStr
 getAuthorities     = get >>= \ a -> return $ authorities a
 setAuthorities     :: (Request (ResourceT IO) -> Maybe (BS.ByteString, BS.ByteString)) -> BrowserAction ()
 setAuthorities   b = get >>= \ a -> put a {authorities = b}
+withAuthorities    :: (Request (ResourceT IO) -> Maybe (BS.ByteString, BS.ByteString)) -> BrowserAction a -> BrowserAction a
+withAuthorities a b = do
+  current <- getAuthorities
+  setAuthorities a
+  out <- b
+  setAuthorities current
+  return out
 -- | Each new Set-Cookie the browser encounters will pass through this filter.
 -- Only cookies that pass the filter (and are already valid) will be allowed into the cookie jar
 getCookieFilter    :: BrowserAction (Request (ResourceT IO) -> Cookie -> IO Bool)
 getCookieFilter    = get >>= \ a -> return $ cookieFilter a
 setCookieFilter    :: (Request (ResourceT IO) -> Cookie -> IO Bool) -> BrowserAction ()
 setCookieFilter  b = get >>= \ a -> put a {cookieFilter = b}
+withCookieFilter   :: (Request (ResourceT IO) -> Cookie -> IO Bool) -> BrowserAction a -> BrowserAction a
+withCookieFilter a b = do
+  current <- getCookieFilter
+  setCookieFilter a
+  out <- b
+  setCookieFilter current
+  return out
 -- | All the cookies!
 getCookieJar       :: BrowserAction CookieJar
 getCookieJar       = get >>= \ a -> return $ cookieJar a
 setCookieJar       :: CookieJar -> BrowserAction ()
 setCookieJar     b = get >>= \ a -> put a {cookieJar = b}
+withCookieJar      :: CookieJar -> BrowserAction a -> BrowserAction a
+withCookieJar a b = do
+  current <- getCookieJar
+  setCookieJar a
+  out <- b
+  setCookieJar current
+  return out
 -- | An optional proxy to send all requests through
+-- if Nothing uses Request's 'proxy'
 getCurrentProxy    :: BrowserAction (Maybe Proxy)
 getCurrentProxy    = get >>= \ a -> return $ currentProxy a
 setCurrentProxy    :: Maybe Proxy -> BrowserAction ()
 setCurrentProxy  b = get >>= \ a -> put a {currentProxy = b}
--- | What string to report our user-agent as
-getUserAgent       :: BrowserAction BS.ByteString
-getUserAgent       = get >>= \ a -> return $ userAgent a
-setUserAgent       :: BS.ByteString -> BrowserAction ()
-setUserAgent     b = get >>= \ a -> put a {userAgent = b}
+withCurrentProxy   :: Maybe Proxy -> BrowserAction a -> BrowserAction a
+withCurrentProxy a b = do
+  current <- getCurrentProxy
+  setCurrentProxy a
+  out <- b
+  setCurrentProxy current
+  return out
+-- | Specifies Headers that should be added to 'Request',
+-- these will override Headers already specified in 'requestHeaders'.
+--
+-- > do insertOverrideHeader ("User-Agent", "http-conduit")
+-- >    insertOverrideHeader ("Connection", "keep-alive")
+-- >    makeRequest def{requestHeaders = [("User-Agent", "another agent"), ("Accept", "everything/digestible")]}
+-- > > User-Agent: http-conduit
+-- > > Accept: everything/digestible
+-- > > Connection: keep-alive
+getOverrideHeaders :: BrowserAction HT.RequestHeaders
+getOverrideHeaders = get >>= \ a -> return $ Map.toList $ overrideHeaders a
+setOverrideHeaders :: HT.RequestHeaders -> BrowserAction ()
+setOverrideHeaders b = get >>= \ a -> put a {overrideHeaders = Map.fromList b}
+withOverrideHeaders:: HT.RequestHeaders -> BrowserAction a -> BrowserAction a
+withOverrideHeaders a b = do
+  current <- getOverrideHeaders
+  setOverrideHeaders a
+  out <- b
+  setOverrideHeaders current
+  return out
+insertOverrideHeader :: HT.Header -> BrowserAction ()
+insertOverrideHeader (b, c) = get >>= \ a -> put a {overrideHeaders = Map.insert b c (overrideHeaders a)}
+deleteOverrideHeader :: HT.HeaderName -> BrowserAction ()
+deleteOverrideHeader b = get >>= \ a -> put a {overrideHeaders = Map.delete b (overrideHeaders a)}
+withOverrideHeader :: HT.Header -> BrowserAction a -> BrowserAction a
+withOverrideHeader a b = do
+  current <- getOverrideHeaders
+  insertOverrideHeader a
+  out <- b
+  setOverrideHeaders current
+  return out
+-- | What string to report our user-agent as.
+-- if Nothing will not send user-agent unless one is specified in 'Request'
+--
+-- > getUserAgent = lookup hUserAgent overrideHeaders
+-- > setUserAgent a = insertOverrideHeader (hUserAgent, a)
+getUserAgent       :: BrowserAction (Maybe BS.ByteString)
+getUserAgent       = get >>= \ a -> return $ Map.lookup HT.hUserAgent (overrideHeaders a)
+setUserAgent       :: Maybe BS.ByteString -> BrowserAction ()
+setUserAgent Nothing = deleteOverrideHeader HT.hUserAgent
+setUserAgent (Just b) = insertOverrideHeader (HT.hUserAgent, b)
+withUserAgent      :: Maybe BS.ByteString -> BrowserAction () -> BrowserAction ()
+withUserAgent a b = do
+  current <- getOverrideHeaders
+  setUserAgent a
+  out <- b
+  setOverrideHeaders current
+  return out
+
 -- | The active manager, managing the connection pool
 getManager         :: BrowserAction Manager
 getManager         = get >>= \ a -> return $ manager a
