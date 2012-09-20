@@ -87,6 +87,9 @@ module Network.HTTP.Conduit.Browser
     , getCurrentProxy
     , setCurrentProxy
     , withCurrentProxy
+    , getCurrentSocksProxy
+    , setCurrentSocksProxy
+    , withCurrentSocksProxy
     , getOverrideHeaders
     , setOverrideHeaders
     , withOverrideHeaders
@@ -112,6 +115,7 @@ import Prelude hiding (catch)
 #endif
 import qualified Network.HTTP.Types as HT
 import qualified Network.HTTP.Types.Header as HT
+import Network.Socks5 (SocksConf)
 import Data.Time.Clock (getCurrentTime, UTCTime)
 import Data.CaseInsensitive (mk)
 import Data.ByteString.UTF8 (fromString)
@@ -135,6 +139,7 @@ data BrowserState = BrowserState
   , cookieFilter        :: Request (ResourceT IO) -> Cookie -> IO Bool
   , cookieJar           :: CookieJar
   , currentProxy        :: Maybe Proxy
+  , currentSocksProxy   :: Maybe SocksConf
   , overrideHeaders     :: Map.Map HT.HeaderName BS.ByteString
   , manager             :: Manager
   } 
@@ -147,6 +152,7 @@ defaultState m = BrowserState { maxRedirects = Nothing
                               , cookieFilter = \ _ _ -> return True
                               , cookieJar = def
                               , currentProxy = Nothing
+                              , currentSocksProxy = Nothing
                               , overrideHeaders = Map.singleton HT.hUserAgent (fromString "http-conduit")
                               , manager = m
                               }
@@ -165,11 +171,13 @@ makeRequest request = do
     , maxRedirects = max_redirects
     , timeout = time_out
     , currentProxy  = current_proxy
+    , currentSocksProxy = current_socks_proxy
     , overrideHeaders = override_headers
     } <- get
   retryHelper (applyOverrideHeaders override_headers $
     request { redirectCount = 0
             , proxy = maybe (proxy request) Just current_proxy
+            , socksProxy = maybe (socksProxy request) Just current_socks_proxy
             , checkStatus = \ _ _ -> Nothing
             , responseTimeout = maybe (responseTimeout request) Just time_out
             }) max_retry_count (fromMaybe (redirectCount request) max_redirects) Nothing
@@ -333,6 +341,19 @@ withCurrentProxy a b = do
   setCurrentProxy a
   out <- b
   setCurrentProxy current
+  return out
+-- | An optional SOCKS proxy to send all requests through
+-- if Nothing uses Request's 'socksProxy'
+getCurrentSocksProxy    :: BrowserAction (Maybe SocksConf)
+getCurrentSocksProxy    = get >>= \ a -> return $ currentSocksProxy a
+setCurrentSocksProxy    :: Maybe SocksConf -> BrowserAction ()
+setCurrentSocksProxy  b = get >>= \ a -> put a {currentSocksProxy = b}
+withCurrentSocksProxy   :: Maybe SocksConf -> BrowserAction a -> BrowserAction a
+withCurrentSocksProxy a b = do
+  current <- getCurrentSocksProxy
+  setCurrentSocksProxy a
+  out <- b
+  setCurrentSocksProxy current
   return out
 -- | Specifies Headers that should be added to 'Request',
 -- these will override Headers already specified in 'requestHeaders'.
