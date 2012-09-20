@@ -99,6 +99,9 @@ module Network.HTTP.Conduit.Browser
     , getUserAgent
     , setUserAgent
     , withUserAgent
+    , getCheckStatus
+    , setCheckStatus
+    , withCheckStatus
     , getManager
     , setManager
     )
@@ -141,6 +144,7 @@ data BrowserState = BrowserState
   , currentProxy        :: Maybe Proxy
   , currentSocksProxy   :: Maybe SocksConf
   , overrideHeaders     :: Map.Map HT.HeaderName BS.ByteString
+  , browserCheckStatus  :: Maybe (HT.Status -> HT.ResponseHeaders -> Maybe SomeException)
   , manager             :: Manager
   } 
 
@@ -154,6 +158,7 @@ defaultState m = BrowserState { maxRedirects = Nothing
                               , currentProxy = Nothing
                               , currentSocksProxy = Nothing
                               , overrideHeaders = Map.singleton HT.hUserAgent (fromString "http-conduit")
+                              , browserCheckStatus = Nothing
                               , manager = m
                               }
 
@@ -173,6 +178,7 @@ makeRequest request = do
     , currentProxy  = current_proxy
     , currentSocksProxy = current_socks_proxy
     , overrideHeaders = override_headers
+    , browserCheckStatus = current_check_status
     } <- get
   retryHelper (applyOverrideHeaders override_headers $
     request { redirectCount = 0
@@ -180,8 +186,11 @@ makeRequest request = do
             , socksProxy = maybe (socksProxy request) Just current_socks_proxy
             , checkStatus = \ _ _ -> Nothing
             , responseTimeout = maybe (responseTimeout request) Just time_out
-            }) max_retry_count (fromMaybe (redirectCount request) max_redirects) Nothing
-  where retryHelper request' retry_count max_redirects e
+            }) max_retry_count
+               (fromMaybe (redirectCount request) max_redirects)
+               (fromMaybe (checkStatus request) current_check_status)
+               Nothing
+  where retryHelper request' retry_count max_redirects check_status e
           | retry_count == 0 = case e of
             Just e' -> throw e'
             Nothing -> throw TooManyRetries
@@ -189,11 +198,10 @@ makeRequest request = do
               resp <- LE.catch (if max_redirects==0
                                   then (\(_,a,_) -> a) `fmap` performRequest request'
                                   else runRedirectionChain request' max_redirects [])
-                (\ e' -> retryHelper request' (retry_count - 1) max_redirects (Just (e' :: HttpException)))
-              let code = HT.statusCode $ HC.responseStatus resp
-              if code < 200 || code >= 300
-                then retryHelper request' (retry_count - 1) max_redirects (Just $ HC.StatusCodeException (HC.responseStatus resp) (HC.responseHeaders resp))
-                else return resp
+                (\ e' -> retryHelper request' (retry_count - 1) max_redirects check_status (Just $ toException (e' :: HttpException)))
+              case check_status (HC.responseStatus resp) (responseHeaders resp) of
+                Nothing -> return resp
+                Just e' -> retryHelper request' (retry_count - 1) max_redirects check_status (Just e')
         performRequest request' = do
               s@(BrowserState { manager = manager'
                               , authorities = auths
@@ -402,6 +410,19 @@ withUserAgent a b = do
   setUserAgent a
   out <- b
   setOverrideHeaders current
+  return out
+-- | Function to check the status code. Note that this will run after all redirects are performed.
+-- if Nothing uses Request's 'checkStatus'
+getCheckStatus    :: BrowserAction (Maybe (HT.Status -> HT.ResponseHeaders -> Maybe SomeException))
+getCheckStatus    = get >>= \ a -> return $ browserCheckStatus a
+setCheckStatus    :: Maybe (HT.Status -> HT.ResponseHeaders -> Maybe SomeException) -> BrowserAction ()
+setCheckStatus  b = get >>= \ a -> put a {browserCheckStatus = b}
+withCheckStatus   :: Maybe (HT.Status -> HT.ResponseHeaders -> Maybe SomeException) -> BrowserAction a -> BrowserAction a
+withCheckStatus a b = do
+  current <- getCheckStatus
+  setCheckStatus a
+  out <- b
+  setCheckStatus current
   return out
 
 -- | The active manager, managing the connection pool

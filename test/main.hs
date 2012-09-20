@@ -1,5 +1,6 @@
 {-# LANGUAGE OverloadedStrings #-}
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE DeriveDataTypeable #-}
 import Test.Hspec.Monadic
 import qualified Data.ByteString as S
 import qualified Data.ByteString.Char8 as S8
@@ -13,7 +14,8 @@ import Network.HTTP.Conduit.Browser
 import Data.ByteString.Base64 (encode)
 import Control.Concurrent (forkIO, killThread, threadDelay)
 import Network.HTTP.Types
-import Control.Exception.Lifted (try, SomeException)
+import Control.Exception.Lifted (try, SomeException, Exception, toException)
+import Data.Typeable (Typeable)
 import Network.HTTP.Conduit.ConnInfo
 import CookieTest (cookieTest)
 import Data.Conduit.Network (runTCPServer, ServerSettings (..), HostPreference (HostAny))
@@ -30,6 +32,11 @@ import qualified Data.ByteString.Lazy as L
 import Blaze.ByteString.Builder (fromByteString)
 
 -- TODO tests for responseTimeout/Browser.timeout.
+
+data TestException = TestException
+    deriving (Show, Typeable)
+
+instance Exception TestException
 
 strictToLazy :: S.ByteString -> L.ByteString
 strictToLazy = L.fromChunks . replicate 1
@@ -241,6 +248,17 @@ main = hspecX $ do
             case elbs of
                  Left StatusCodeException{} -> return ()
                  _ -> error "redirectCount should be 0!"
+        it "uses checkStatus correctly" $ do
+            tid <- forkIO $ run 3012 app
+            request <- parseUrl "http://127.0.0.1:3012/useragent"
+            elbs <- try $ withManager $ \manager -> do
+                browse manager $ do
+                    setCheckStatus $ Just $  \ _ _ -> Just $ toException TestException
+                    makeRequestLbs request
+            killThread tid
+            case elbs of
+                Left TestException -> return ()
+                _ -> error "Should have thrown an exception!"
     describe "httpLbs" $ do
         it "preserves 'set-cookie' headers" $ do
             tid <- forkIO $ run 3010 app
