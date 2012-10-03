@@ -145,6 +145,7 @@ instance Default (Request m) where
             if 200 <= sci && sci < 300
                 then Nothing
                 else Just $ toException $ StatusCodeException s hs Nothing
+        , debug = False
         , responseTimeout = Just 5000000
         }
 
