@@ -143,6 +143,7 @@ import Control.Monad ((<=<))
 import Control.Monad.IO.Class (MonadIO (liftIO))
 import Control.Monad.Trans.Control (MonadBaseControl)
 
+import Control.Exception (fromException, toException)
 import qualified Data.Conduit as C
 import qualified Data.Conduit.Internal as CI
 import Data.Conduit.Blaze (builderToByteString)
@@ -189,18 +190,27 @@ http req0 manager = do
     case checkStatus req0 status hs of
         Nothing -> return res
         Just exc -> do
-            let CI.ResumableSource _ final = body
-            final
-            liftIO $ throwIO exc
+            exc' <- case fromException exc of
+                    Just (StatusCodeException s hs Nothing) | debug req0 -> do
+                        lbs <- fmap responseBody $ lbsResponse res
+                        return $ toException $ StatusCodeException s hs (Just lbs)
+                    _ -> do
+                        let CI.ResumableSource _ final = body
+                        final
+                        return exc
+            liftIO $ throwIO exc'
   where
-    go (-1) _ _ ress = liftIO . throwIO . TooManyRedirects =<< mapM lbsResponse ress
+    go (-1) _ _ [] = liftIO $ throwIO $ TooManyRedirects Nothing
+    go (-1) _ _ ress = liftIO . throwIO . TooManyRedirects . Just =<< mapM lbsResponse ress
     go count req'' cookie_jar'' ress = do
         now <- liftIO getCurrentTime
         let (req', cookie_jar') = insertCookiesIntoRequest req'' (evictExpiredCookies cookie_jar'' now) now
         res <- httpRaw req' manager
         let (cookie_jar, _) = updateCookieJar res req' now cookie_jar'
         case getRedirectedRequest req' (responseHeaders res) (W.statusCode (responseStatus res)) of
-            Just req -> go (count - 1) req cookie_jar (res:ress)
+            Just req -> go (count - 1) req cookie_jar (if debug req''
+                                                        then (res:ress)
+                                                        else [])
             Nothing -> return res
 
 -- | Get a 'Response' without any redirect following.

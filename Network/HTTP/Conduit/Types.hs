@@ -91,6 +91,9 @@ data Request m = Request
     , redirectCount :: Int
     -- ^ How many redirects to follow when getting a resource. 0 means follow
     -- no redirects. Default value: 10.
+    , debug :: Bool
+    -- ^ If @True@, response bodies and full responses would be included in 'HttpException'
+    -- Default: False
     , checkStatus :: W.Status -> W.ResponseHeaders -> Maybe SomeException
     -- ^ Check the status code. Note that this will run after all redirects are
     -- performed. Default: return a @StatusCodeException@ on non-2XX responses.
@@ -123,10 +126,10 @@ data Proxy = Proxy
     , proxyPort :: Int -- ^ The port number of the HTTP proxy.
     }
 
-data HttpException = StatusCodeException W.Status W.ResponseHeaders
+data HttpException = StatusCodeException W.Status W.ResponseHeaders (Maybe L.ByteString) -- ^ Depending on whether 'debug' field is set, 'StatusCodeException' can include full body on offending request.
                    | InvalidUrlException String String
-                   | TooManyRedirects [Response L.ByteString]  -- ^ List of encountered responses containing redirects in reverse chronological order; including last redirect, which triggered the exception and was not followed.
-                   | UnparseableRedirect (Response L.ByteString) -- ^ Response containing unparseable redirect.
+                   | TooManyRedirects (Maybe [Response L.ByteString])  -- ^  Depending on whether 'debug' field is set, 'TooManyRedirects' can include list of encountered responses containing redirects in reverse chronological order; with head being last redirect, which triggered the exception and was not followed.
+                   | UnparseableRedirect W.Status W.ResponseHeaders
                    | TooManyRetries
                    | HttpParserException String
                    | HandshakeFailed
