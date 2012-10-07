@@ -384,7 +384,10 @@ withCurrentSocksProxy a b = do
 getOverrideHeaders :: BrowserAction HT.RequestHeaders
 getOverrideHeaders = get >>= \ a -> return $ Map.toList $ overrideHeaders a
 setOverrideHeaders :: HT.RequestHeaders -> BrowserAction ()
-setOverrideHeaders b = get >>= \ a -> put a {overrideHeaders = Map.fromList b}
+setOverrideHeaders b = do
+    current_user_agent <- getUserAgent
+    get >>= \ a -> put a {overrideHeaders = Map.fromList b}
+    setUserAgent current_user_agent
 withOverrideHeaders:: HT.RequestHeaders -> BrowserAction a -> BrowserAction a
 withOverrideHeaders a b = do
   current <- getOverrideHeaders

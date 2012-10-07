@@ -164,11 +164,24 @@ main = hspecX $ do
             request <- parseUrl "http://127.0.0.1:3012/useragent"
             elbs <- withManager $ \manager -> do
                 browse manager $ do
+                    setUserAgent Nothing
                     setOverrideHeaders []
                     makeRequestLbs request{Network.HTTP.Conduit.requestHeaders = [(hUserAgent, "bwahaha")]}
             killThread tid
             if (lazyToStrict $ responseBody elbs) /= fromString "bwahaha"
                  then error "Shouldn't have deleted user-agent!"
+                 else return ()
+        it "setting overrideheaders doesn't unset useragent" $ do
+            tid <- forkIO $ run 3012 app
+            request <- parseUrl "http://127.0.0.1:3012/useragent"
+            elbs <- withManager $ \manager -> do
+                browse manager $ do
+                    setUserAgent $ Just "abcd"
+                    setOverrideHeaders []
+                    makeRequestLbs request{Network.HTTP.Conduit.requestHeaders = [(hUserAgent, "bwahaha")]}
+            killThread tid
+            if (lazyToStrict $ responseBody elbs) /= fromString "abcd"
+                 then error "Should have overrided user-agent!"
                  else return ()
         it "doesn't override additional headers" $ do
             tid <- forkIO $ run 3012 app
