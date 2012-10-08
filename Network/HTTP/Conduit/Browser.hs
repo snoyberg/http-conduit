@@ -102,9 +102,6 @@ module Network.HTTP.Conduit.Browser
     , getCheckStatus
     , setCheckStatus
     , withCheckStatus
-    , getDebug
-    , setDebug
-    , withDebug
     , getManager
     , setManager
     )
@@ -148,7 +145,6 @@ data BrowserState = BrowserState
   , currentSocksProxy   :: Maybe SocksConf
   , overrideHeaders     :: Map.Map HT.HeaderName BS.ByteString
   , browserCheckStatus  :: Maybe (HT.Status -> HT.ResponseHeaders -> Maybe SomeException)
-  , browserDebug        :: Maybe Bool
   , manager             :: Manager
   } 
 
@@ -163,7 +159,6 @@ defaultState m = BrowserState { maxRedirects = Nothing
                               , currentSocksProxy = Nothing
                               , overrideHeaders = Map.singleton HT.hUserAgent (fromString "http-conduit")
                               , browserCheckStatus = Nothing
-                              , browserDebug = Nothing
                               , manager = m
                               }
 
@@ -184,7 +179,6 @@ makeRequest request = do
     , currentSocksProxy = current_socks_proxy
     , overrideHeaders = override_headers
     , browserCheckStatus = current_check_status
-    , browserDebug = current_debug
     } <- get
   retryHelper (applyOverrideHeaders override_headers $
     request { redirectCount = 0
@@ -192,7 +186,6 @@ makeRequest request = do
             , socksProxy = maybe (socksProxy request) Just current_socks_proxy
             , checkStatus = \ _ _ -> Nothing
             , responseTimeout = maybe (responseTimeout request) Just time_out
-            , debug = fromMaybe (debug request) current_debug
             }) max_retry_count
                (fromMaybe (redirectCount request) max_redirects)
                (fromMaybe (checkStatus request) current_check_status)
@@ -224,16 +217,14 @@ makeRequest request = do
               put $ s {cookieJar = cookie_jar''}
               return (request'', res, response)
         runRedirectionChain request' redirect_count ress
-          | redirect_count == (-1) = case ress of
-            [] -> throw $ TooManyRedirects Nothing
-            _ -> throw . TooManyRedirects . Just =<< mapM (liftIO . runResourceT . lbsResponse) ress
+          | redirect_count == (-1) = throw . TooManyRedirects =<< mapM (liftIO . runResourceT . lbsResponse) ress
           | otherwise = do
               (request'', res, response) <- performRequest request'
-              let code = HT.statusCode (responseStatus response)
+              let code = HT.statusCode (HC.responseStatus response)
               if code >= 300 && code < 400
                 then do request''' <- case HC.getRedirectedRequest request'' (responseHeaders response) code of
                             Just a -> return a
-                            Nothing -> throw $ HC.UnparseableRedirect (responseStatus response) (responseHeaders response)
+                            Nothing -> throw . HC.UnparseableRedirect =<< (liftIO $ runResourceT $ lbsResponse response)
                         runRedirectionChain request''' (redirect_count - 1) (res:ress)
                 else return res
         applyAuthorities auths request' = case auths request' of
@@ -435,19 +426,6 @@ withCheckStatus a b = do
   setCheckStatus a
   out <- b
   setCheckStatus current
-  return out
--- | Whether to include response bodies in 'HttpException'
--- if Nothing uses Request's 'debug'
-getDebug    :: BrowserAction (Maybe Bool)
-getDebug    = get >>= \ a -> return $ browserDebug a
-setDebug    :: Maybe Bool -> BrowserAction ()
-setDebug  b = get >>= \ a -> put a {browserDebug = b}
-withDebug   :: Maybe Bool -> BrowserAction a -> BrowserAction a
-withDebug a b = do
-  current <- getDebug
-  setDebug a
-  out <- b
-  setDebug current
   return out
 
 -- | The active manager, managing the connection pool
