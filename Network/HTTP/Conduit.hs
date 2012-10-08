@@ -88,7 +88,6 @@ module Network.HTTP.Conduit
     , rawBody
     , decompress
     , redirectCount
-    , debug
     , checkStatus
     , responseTimeout
       -- * Manager

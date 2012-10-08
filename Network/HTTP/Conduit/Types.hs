@@ -126,7 +126,7 @@ data Proxy = Proxy
     , proxyPort :: Int -- ^ The port number of the HTTP proxy.
     }
 
-data HttpException = StatusCodeException W.Status W.ResponseHeaders (Maybe L.ByteString) -- ^ Depending on whether 'debug' field is set, 'StatusCodeException' can include full body of offending request.
+data HttpException = StatusCodeException W.Status W.ResponseHeaders (Maybe L.ByteString) -- ^ Depending on whether 'debug' field is set, 'StatusCodeException' can include full body on offending request.
                    | InvalidUrlException String String
                    | TooManyRedirects (Maybe [Response L.ByteString])  -- ^  Depending on whether 'debug' field is set, 'TooManyRedirects' can include list of encountered responses containing redirects in reverse chronological order; with head being last redirect, which triggered the exception and was not followed.
                    | UnparseableRedirect W.Status W.ResponseHeaders

@@ -141,11 +141,11 @@ instance Default (Request m) where
         , rawBody = False
         , decompress = browserDecompress
         , redirectCount = 10
-        , debug = False
         , checkStatus = \s@(W.Status sci _) hs ->
             if 200 <= sci && sci < 300
                 then Nothing
                 else Just $ toException $ StatusCodeException s hs Nothing
+        , debug = False
         , responseTimeout = Just 5000000
         }
 
