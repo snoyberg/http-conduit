@@ -144,7 +144,7 @@ instance Default (Request m) where
         , checkStatus = \s@(W.Status sci _) hs ->
             if 200 <= sci && sci < 300
                 then Nothing
-                else Just $ toException $ StatusCodeException s hs Nothing
+                else Just $ toException $ StatusCodeException s hs
         , responseTimeout = Just 5000000
         }
 
