@@ -49,8 +49,8 @@ import Control.DeepSeq (deepseq)
 import Network (connectTo, PortID (PortNumber), HostName)
 import Network.Socket (socketToHandle)
 import Data.Certificate.X509 (X509, encodeCertificate)
-import Data.CertificateStore (CertificateStore)
-import System.Certificate.X509 (getSystemCertificateStore)
+import Data.CertificateStore (CertificateStore, makeCertificateStore)
+--import System.Certificate.X509 (getSystemCertificateStore)
 
 import Network.TLS (PrivateKey)
 import Network.TLS.Extra (certificateVerifyChain, certificateVerifyDomain)
@@ -72,7 +72,9 @@ data ManagerSettings = ManagerSettings
     , managerCheckCerts :: CertificateStore -> S8.ByteString -> [X509] -> IO CertificateUsage
       -- ^ Check if the server certificate is valid. Only relevant for HTTPS.
     , managerCertStore :: IO CertificateStore
-      -- ^ Load up the certificate store. By default uses the system store.
+      -- ^ Load up the certificate store. By default returns empty store.
+      -- Use 'getSystemCertificateStore' to enable system certificate store.
+      -- Store is not loaded until first use. Only relevant for HTTPS. 
     }
 
 type X509Encoded = L.ByteString
@@ -81,7 +83,8 @@ instance Default ManagerSettings where
     def = ManagerSettings
         { managerConnCount = 10
         , managerCheckCerts = defaultCheckCerts
-        , managerCertStore = getSystemCertificateStore
+--        , managerCertStore = getSystemCertificateStore
+        , managerCertStore = return $ makeCertificateStore []
         }
 
 -- | Check certificates using the operating system's certificate checker.

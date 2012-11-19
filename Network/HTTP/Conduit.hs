@@ -106,6 +106,7 @@ module Network.HTTP.Conduit
     , managerConnCount
     , managerCheckCerts
     , managerCertStore
+    , getSystemCertificateStore
       -- *** Defaults
     , defaultCheckCerts
       -- * Cookies
@@ -157,6 +158,7 @@ import qualified Data.Conduit.Internal as CI
 import Data.Conduit.Blaze (builderToByteString)
 import Data.Conduit (MonadResource)
 import Control.Exception.Lifted (try, SomeException)
+import System.Certificate.X509 (getSystemCertificateStore)
 
 import Data.Time.Clock
 
