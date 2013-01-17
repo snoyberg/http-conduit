@@ -36,6 +36,9 @@ import qualified Data.ByteString.Lazy as L
 import Blaze.ByteString.Builder (fromByteString, toByteString)
 import System.IO
 import Data.Monoid (mconcat)
+import Data.Time.Clock
+import Data.Time.Calendar
+import Web.Cookie
 
 app :: Application
 app req =
@@ -43,9 +46,12 @@ app req =
         [] -> return $ responseLBS status200 [] "homepage"
         ["cookies"] -> return $ responseLBS status200 [tastyCookie] "cookies"
         ["cookie_redir1"] -> return $ responseLBS status303 [tastyCookie, (hLocation, "/checkcookie")] ""
-        ["checkcookie"] -> return $ case lookup hCookie $ Wai.requestHeaders req of
-                                Just "flavor=chocolate-chip" -> responseLBS status200 [] "nom-nom-nom"
-                                _ -> responseLBS status412 [] "Baaaw where's my chocolate?"
+        ["cookie_redir2"] -> return $ responseLBS status303 [("Set-Cookie", "baka=baka;"), (hLocation, "/checkcookie")] ""
+        ["checkcookie"] -> return $
+                case lookup hCookie $ Wai.requestHeaders req of
+                    Just x | "flavor=chocolate-chip" `S8.isInfixOf` x ->
+                                responseLBS status200 [] "nom-nom-nom"
+                    _ -> responseLBS status200 [] $ L8.pack $ show $ Wai.requestHeaders req
         ["infredir", i'] ->
             let i = read $ T.unpack i' :: Int
             in return $ responseLBS status303
@@ -53,7 +59,7 @@ app req =
                     (L8.pack $ show i)
         _ -> return $ responseLBS status404 [] "not found"
 
-    where tastyCookie = (mk (fromString "Set-Cookie"), fromString "flavor=chocolate-chip;")
+    where tastyCookie = ("Set-Cookie", "flavor=chocolate-chip;")
 
 nextPort :: I.IORef Int
 nextPort = unsafePerformIO $ I.newIORef 15452
@@ -107,6 +113,17 @@ main = withSocketsDo $ do
                 liftIO $ assertBool "response contains a 'set-cookie' header" $ length setCookieHeaders > 0
         it "redirects set cookies" $ withApp app $ \port -> do
             request <- parseUrl $ concat ["http://127.0.0.1:", show port, "/cookie_redir1"]
+            withManager $ \manager -> do
+                Response _ _ _ body <- httpLbs request manager
+                liftIO $ body @?= "nom-nom-nom"
+        it "user-defined cookies pass through redirects" $ withApp app $ \port -> do
+            req <- parseUrl $ concat ["http://127.0.0.1:", show port, "/cookie_redir2"]
+            let setCookie = def
+                    { setCookieName = "flavor"
+                    , setCookieValue = "chocolate-chip" }
+                default_time = UTCTime (ModifiedJulianDay 56200) (secondsToDiffTime 0)
+                cjar = receiveSetCookie setCookie req default_time True def
+                request = fst $ insertCookiesIntoRequest req cjar default_time
             withManager $ \manager -> do
                 Response _ _ _ body <- httpLbs request manager
                 liftIO $ body @?= "nom-nom-nom"
@@ -212,7 +229,7 @@ main = withSocketsDo $ do
     describe "HTTP/1.0" $ do
         it "BaseHTTP" $ do
             let baseHTTP app' = do
-                    appSource app' $$ await
+                    _ <- appSource app' $$ await
                     yield "HTTP/1.0 200 OK\r\n\r\nThis is it!" $$ appSink app'
             withCApp baseHTTP $ \port -> withManager $ \manager -> do
                 req <- parseUrl $ "http://127.0.0.1:" ++ show port
