@@ -46,6 +46,7 @@ app req =
         [] -> return $ responseLBS status200 [] "homepage"
         ["cookies"] -> return $ responseLBS status200 [tastyCookie] "cookies"
         ["cookie_redir1"] -> return $ responseLBS status303 [tastyCookie, (hLocation, "/checkcookie")] ""
+        ["cookie_redir2"] -> return $ responseLBS status303 [("Set-Cookie", "baka=baka;"), (hLocation, "/checkcookie")] ""
         ["checkcookie"] -> return $ case lookup hCookie $ Wai.requestHeaders req of
                                 Just "flavor=chocolate-chip" -> responseLBS status200 [] "nom-nom-nom"
                                 _ -> responseLBS status412 [] "Baaaw where's my chocolate?"
@@ -56,7 +57,7 @@ app req =
                     (L8.pack $ show i)
         _ -> return $ responseLBS status404 [] "not found"
 
-    where tastyCookie = (mk (fromString "Set-Cookie"), fromString "flavor=chocolate-chip;")
+    where tastyCookie = ("Set-Cookie", "flavor=chocolate-chip;")
 
 nextPort :: I.IORef Int
 nextPort = unsafePerformIO $ I.newIORef 15452
@@ -113,8 +114,8 @@ main = withSocketsDo $ do
             withManager $ \manager -> do
                 Response _ _ _ body <- httpLbs request manager
                 liftIO $ body @?= "nom-nom-nom"
-        it "cookies arrive" $ withApp app $ \port -> do
-            req <- parseUrl $ concat ["http://127.0.0.1:", show port, "/checkcookie"]
+        it "user-defined cookies pass through redirects" $ withApp app $ \port -> do
+            req <- parseUrl $ concat ["http://127.0.0.1:", show port, "/cookie_redir2"]
             let setCookie = def
                     { setCookieName = "flavor"
                     , setCookieValue = "chocolate-chip" }
