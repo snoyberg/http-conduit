@@ -47,9 +47,11 @@ app req =
         ["cookies"] -> return $ responseLBS status200 [tastyCookie] "cookies"
         ["cookie_redir1"] -> return $ responseLBS status303 [tastyCookie, (hLocation, "/checkcookie")] ""
         ["cookie_redir2"] -> return $ responseLBS status303 [("Set-Cookie", "baka=baka;"), (hLocation, "/checkcookie")] ""
-        ["checkcookie"] -> return $ case lookup hCookie $ Wai.requestHeaders req of
-                                Just "flavor=chocolate-chip" -> responseLBS status200 [] "nom-nom-nom"
-                                _ -> responseLBS status412 [] "Baaaw where's my chocolate?"
+        ["checkcookie"] -> return $
+                case lookup hCookie $ Wai.requestHeaders req of
+                    Just x | "flavor=chocolate-chip" `S8.isInfixOf` x ->
+                                responseLBS status200 [] "nom-nom-nom"
+                    _ -> responseLBS status200 [] $ L8.pack $ show $ Wai.requestHeaders req
         ["infredir", i'] ->
             let i = read $ T.unpack i' :: Int
             in return $ responseLBS status303
