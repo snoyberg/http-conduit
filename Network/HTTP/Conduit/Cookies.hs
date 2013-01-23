@@ -13,6 +13,9 @@ import Web.Cookie
 import qualified Data.CaseInsensitive as CI
 import Blaze.ByteString.Builder
 import Data.Default
+import qualified Network.PublicSuffixList.Lookup as PSL
+import Data.Text.Encoding (decodeUtf8With)
+import Data.Text.Encoding.Error (lenientDecode)
 
 import qualified Network.HTTP.Conduit.Request as Req
 import qualified Network.HTTP.Conduit.Response as Res
@@ -128,7 +131,7 @@ rejectPublicSuffixes :: Bool
 rejectPublicSuffixes = True
 
 isPublicSuffix :: BS.ByteString -> Bool
-isPublicSuffix _ = False
+isPublicSuffix = PSL.isSuffix . decodeUtf8With lenientDecode
 
 -- | This corresponds to the eviction algorithm described in Section 5.3 \"Storage Model\"
 evictExpiredCookies :: CookieJar  -- ^ Input cookie jar
@@ -252,7 +255,8 @@ generateCookie set_cookie request now is_http_api = do
           | firstCondition && domain' == (Req.host request) = return BS.empty
           | firstCondition = Nothing
           | otherwise = return domain'
-          where firstCondition = rejectPublicSuffixes && isPublicSuffix domain'
+          where firstCondition = rejectPublicSuffixes && has_a_character && isPublicSuffix domain'
+                has_a_character = not (BS.null domain')
         step6 domain'
           | firstCondition && not (domainMatches (Req.host request) domain') = Nothing
           | firstCondition = return (domain', False)
