@@ -133,6 +133,7 @@ module Network.HTTP.Conduit
     , checkStatus
     , responseTimeout
     , cookieJar
+    , getConnectionWrapper
       -- * Response
     , Response
     , responseStatus
