@@ -24,10 +24,9 @@ chunkedConduit :: MonadThrow m
 chunkedConduit sendHeaders = do
     i <- getLen
     when sendHeaders $ yield $ S8.pack $ showHex i "\r\n"
-    unless (i == 0) $ do
-        CB.isolate i
-        dropCRLF
-        chunkedConduit sendHeaders
+    CB.isolate i
+    dropCRLF
+    unless (i == 0) $ chunkedConduit sendHeaders
   where
     getLen = do
         (i, empty) <- start 0 True
