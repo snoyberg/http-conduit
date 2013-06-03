@@ -198,7 +198,7 @@ data HttpException = StatusCodeException W.Status W.ResponseHeaders CookieJar
                    -- ^ Expected size/actual size.
                    --
                    -- Since 1.9.4
-                   | InvalidChunkHeaders
+                   | InvalidChunkedData
                    -- ^
                    --
                    -- Since 1.9.4
