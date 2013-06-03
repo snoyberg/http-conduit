@@ -1,4 +1,4 @@
-{-# LANGUAGE FlexibleContexts #-}
+{-# LANGUAGE FlexibleContexts, OverloadedStrings #-}
 module Network.HTTP.Conduit.Chunk
     ( chunkedConduit
     , chunkIt
@@ -16,9 +16,7 @@ import Data.Conduit
 import qualified Data.Conduit.Binary as CB
 
 import Control.Monad (when, unless)
-import Control.Exception (assert)
-import Data.Maybe (fromMaybe)
-import Network.HTTP.Conduit.Types (HttpException (InvalidChunkHeaders))
+import Network.HTTP.Conduit.Types (HttpException (InvalidChunkedData))
 
 chunkedConduit :: MonadThrow m
                => Bool -- ^ send the headers as well, necessary for a proxy
@@ -26,44 +24,44 @@ chunkedConduit :: MonadThrow m
 chunkedConduit sendHeaders = do
     i <- getLen
     when sendHeaders $ yield $ S8.pack $ showHex i "\r\n"
-    unless (i == 0) $ do
-        CB.isolate i
-        CB.drop 2
-        chunkedConduit sendHeaders
+    CB.isolate i
+    dropCRLF
+    when sendHeaders $ yield "\r\n"
+    unless (i == 0) $ chunkedConduit sendHeaders
   where
-    getLen =
-        start Nothing
+    getLen = do
+        (i, empty) <- start 0 True
+        when empty $ monadThrow InvalidChunkedData
+        return i
       where
-        start i = await >>= maybe (returnLen i) (go' i)
+        start i empty = await >>= maybe (return (i, empty)) (go i empty)
 
-        returnLen Nothing = monadThrow InvalidChunkHeaders
-        returnLen (Just i) = return i
-
-        go' i bs
-            | S.null bs = start i
-            | otherwise = go (fromMaybe 0 i) bs
-
-        go i bs =
+        go i empty bs =
             case S.uncons bs of
-                Nothing -> start $ Just i
+                Nothing -> start i empty
+                Just (13, _) -> do
+                    leftover bs
+                    dropCRLF
+                    return (i, empty)
+                Just (59, bs') -> do
+                    leftover bs'
+                    CB.dropWhile (/= 13)
+                    dropCRLF
+                    return (i, empty)
                 Just (w, bs') ->
                     case toI w of
-                        Just i' -> go (i * 16 + i') bs'
-                        Nothing -> do
-                            stripNewLine bs
-                            return i
-
-        stripNewLine bs =
-            case S.uncons $ S.dropWhile (/= 10) bs of
-                Just (10, bs') -> leftover bs'
-                Just _ -> assert False $ await >>= maybe (return ()) stripNewLine
-                Nothing -> await >>= maybe (return ()) stripNewLine
+                        Just i' -> go (i * 16 + i') False bs'
+                        Nothing -> monadThrow InvalidChunkedData
 
         toI w
             | 48 <= w && w <= 57  = Just $ fromIntegral w - 48
             | 65 <= w && w <= 70  = Just $ fromIntegral w - 55
             | 97 <= w && w <= 102 = Just $ fromIntegral w - 87
             | otherwise = Nothing
+
+    dropCRLF = do
+        s <- CB.take 2
+        when (s /= "\r\n") $ monadThrow InvalidChunkedData
 
 chunkIt :: Monad m => Conduit Blaze.Builder m Blaze.Builder
 chunkIt =
