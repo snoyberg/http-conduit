@@ -149,11 +149,13 @@ sslClientConn _desc host onCerts clientCerts h = do
             bye istate `E.finally` hClose h
         }
   where
-    recvD istate = do
+    recvD istate = E.handle onEOF $ do
         x <- recvData istate
         if S.null x
             then recvD istate
             else return x
+    onEOF Error_EOF = return S.empty
+    onEOF e = throwIO e
 
 getSocket :: Maybe NS.HostAddress -> String -> Int -> Maybe SocksConf -> IO NS.Socket
 getSocket _ host' port' (Just socksConf) = do
