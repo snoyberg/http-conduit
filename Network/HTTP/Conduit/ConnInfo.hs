@@ -146,7 +146,8 @@ sslClientConn _desc host onCerts clientCerts h = do
 #if DEBUG
             removeSocket i
 #endif
-            bye istate `E.finally` hClose h
+            (bye istate `E.finally` hClose h) `E.catch`
+                \(_ :: E.IOException) -> return ()
         }
   where
     recvD istate = E.handle onEOF $ do

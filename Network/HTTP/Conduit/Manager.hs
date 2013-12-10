@@ -39,7 +39,7 @@ import qualified Data.Text as T
 
 import Control.Monad.Trans.Control (MonadBaseControl)
 import Control.Monad.IO.Class (MonadIO, liftIO)
-import Control.Exception (mask_, SomeException, catch, throwIO, fromException)
+import Control.Exception (mask_, SomeException, catch, throwIO, fromException, IOException)
 import Control.Monad.Trans.Resource
     ( ResourceT, runResourceT, MonadResource
     , MonadThrow, MonadUnsafeIO
@@ -328,7 +328,7 @@ closeManager' connsRef = mask_ $ do
     mapM_ (nonEmptyMapM_ safeConnClose) $ maybe [] Map.elems m
 
 safeConnClose :: ConnInfo -> IO ()
-safeConnClose ci = connClose ci `catch` \(_::SomeException) -> return ()
+safeConnClose ci = connClose ci `catch` \(_::IOException) -> return ()
 
 nonEmptyMapM_ :: Monad m => (a -> m ()) -> NonEmptyList a -> m ()
 nonEmptyMapM_ f (One x _) = f x
