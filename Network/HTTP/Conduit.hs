@@ -153,6 +153,7 @@ module Network.HTTP.Conduit
     , withManagerSettings
       -- ** Settings
     , ManagerSettings
+    , conduitManagerSettings
     , managerConnCount
     , managerCheckCerts
     , managerCertStore
@@ -407,3 +408,7 @@ simpleHttp url = liftIO $ withManager $ \man -> do
 
 setConnectionClose :: Request m -> Request m
 setConnectionClose req = req{requestHeaders = ("Connection", "close") : requestHeaders req}
+
+-- | Since 1.9.6
+conduitManagerSettings :: ManagerSettings
+conduitManagerSettings = def
