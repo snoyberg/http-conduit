@@ -1,3 +1,2 @@
-NOTE: This repository is no longer in use. It has been superceded by:
-
-https://github.com/snoyberg/http-client
+> [!NOTE]
+> This repository is archived. The maintained HTTP client packages live at [snoyberg/http-client](https://github.com/snoyberg/http-client).
